@@ -22,6 +22,7 @@ class GraphLinearLayer(nn.Module):
     def forward(self, input):
         return F.linear(input, self.weight*self.mask, bias=None)
 
+
 class GraphPool(nn.Module):
     def __init__(self, vertices, coarsening):
         super(GraphPool, self).__init__()
@@ -36,9 +37,9 @@ class GraphPool(nn.Module):
                 matrix[i,j] = 1.0/float(len(coarsening[i]))
         return Variable(matrix, requires_grad = False)
 
-
     def forward(self, input):
         return F.linear(input, self.pool_matrix, bias = None)
+
 
 class GraphReversePool(nn.Module):
     def __init__(self, vertices, coarsening):
@@ -54,25 +55,73 @@ class GraphReversePool(nn.Module):
                 matrix[i,j] = 1.0
         return Variable(matrix, requires_grad = False)
 
-
     def forward(self, input):
         return F.linear(input, self.pool_matrix, bias = None)
 
+
 class GCN(nn.Module):
 
-    def __init__(self, vertices, edge_list):
+    def __init__(self, input_graph):
         super(GCN, self).__init__()
 
-        self.vertices = vertices
-        self.mask = Variable(self.create_mask(vertices, edge_list), requires_grad = False)
-        self.contraction = [[0,1], [2,4], [3]] # hardcoded for now
-        self.mask2 = Variable(self.create_mask(3, [(0,1), (0,2)]), requires_grad = False) 
+        input_graph = input_graph
 
-        self.layer1 = GraphLinearLayer(vertices, self.mask)
-        self.pool = GraphPool(vertices, self.contraction)
-        self.layer2 = GraphLinearLayer(3, self.mask2) 
-        self.reverse_pool = GraphReversePool(5, self.contraction)
-        self.layer3 = GraphLinearLayer(vertices, self.mask)
+        mask0 = Variable(input_graph.mask, requires_grad = False)
+        self.layer0 = GraphLinearLayer(input_graph.vertices, mask0)
+
+        contraction0, graph1 = self.coarsen(input_graph)
+        self.pool = GraphPool(input_graph.vertices, contraction0)
+        
+        mask1 = Variable(graph1.mask, requires_grad = False) 
+        self.layer1 = GraphLinearLayer(graph1.vertices, mask1)
+
+        self.reverse_pool = GraphReversePool(input_graph.vertices, contraction0)
+        self.layer2 = GraphLinearLayer(input_graph.vertices, mask0)
+
+    def forward(self, x):
+        
+        x = F.leaky_relu(self.layer0(x))
+        x = self.pool(x)
+        x = F.leaky_relu(self.layer1(x))
+        x = self.reverse_pool(x)
+        x = self.layer2(x)
+        return x
+
+    def coarsen(self, graph):
+        coarsening = []
+        temp_mask = graph.mask.clone()
+        mapping = {}
+        num_found = 0
+        while num_found < graph.vertices:
+            _value, index = torch.sum(temp_mask, dim=1).max(0)
+            group = [i for i in range(graph.vertices) if temp_mask[i, index] == 1]
+            for i in group:
+                mapping[i] = len(coarsening)
+            num_found += len(group)
+            coarsening.append(group)
+            for i in group:
+                temp_mask[i] = torch.zeros(graph.vertices)
+                torch.transpose(temp_mask,0,1)[i] = torch.zeros(graph.vertices)
+
+        new_edge_list = set()
+        for i, j in graph.edge_list:
+
+            i_new = mapping[i]
+            j_new = mapping[j]
+            if i_new != j_new:
+                new_edge_list.add((min([i_new,j_new]), max([i_new,j_new])))
+
+        new_graph = Graph(len(coarsening), list(new_edge_list))
+
+        return coarsening, new_graph
+
+
+class Graph:
+
+    def __init__(self, vertices, edge_list):
+        self.vertices = vertices
+        self.edge_list = edge_list
+        self.mask = self.create_mask(vertices, edge_list)
 
     def create_mask(self, num_vertices, edge_list):
         mask = torch.zeros(num_vertices,num_vertices)
@@ -84,15 +133,6 @@ class GCN(nn.Module):
             mask[i,i] = 1.0
         return mask
 
-
-    def forward(self, x):
-        
-        x = F.leaky_relu(self.layer1(x))
-        x = self.pool(x)
-        x = F.leaky_relu(self.layer2(x))
-        x = self.reverse_pool(x)
-        x = self.layer3(x)
-        return x
 
 def train(data, net):
 
@@ -117,11 +157,8 @@ def train(data, net):
 
 num_vertices = 5
 edge_list = [(0,1), (1,2), (2,0), (0,3), (1,4)]
-# num_vertices = 3
-# edge_list = [(0,1), (1,2)]
 
-# mask = create_mask(num_vertices, edge_list)
-net = GCN(num_vertices, edge_list)
+net = GCN(Graph(num_vertices,edge_list))
 
 data = [torch.rand(num_vertices, dtype=torch.float) for i in range(10)]
 
