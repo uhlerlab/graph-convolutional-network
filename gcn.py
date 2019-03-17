@@ -66,25 +66,45 @@ class GCN(nn.Module):
 
         input_graph = input_graph
 
+        # mask0 = Variable(input_graph.mask, requires_grad = False)
+        # self.layer0 = GraphLinearLayer(input_graph.vertices, mask0)
+        # contraction0, graph1 = self.coarsen(input_graph)
+        # self.pool = GraphPool(input_graph.vertices, contraction0)
+        
+        # mask1 = Variable(graph1.mask, requires_grad = False) 
+        # self.layer1 = GraphLinearLayer(graph1.vertices, mask1)
+
+        # self.reverse_pool = GraphReversePool(input_graph.vertices, contraction0)
+        # self.layer2 = GraphLinearLayer(input_graph.vertices, mask0)
+
         mask0 = Variable(input_graph.mask, requires_grad = False)
         self.layer0 = GraphLinearLayer(input_graph.vertices, mask0)
-
-        contraction0, graph1 = self.coarsen(input_graph)
+        contraction0 = [[0,1,2,3],[2,3,4,5]]
         self.pool = GraphPool(input_graph.vertices, contraction0)
-        
+        graph1 = Graph(2, [(0,1)])
+
         mask1 = Variable(graph1.mask, requires_grad = False) 
         self.layer1 = GraphLinearLayer(graph1.vertices, mask1)
 
         self.reverse_pool = GraphReversePool(input_graph.vertices, contraction0)
         self.layer2 = GraphLinearLayer(input_graph.vertices, mask0)
 
-    def forward(self, x):
-        
+    def encode(self, x):
         x = F.leaky_relu(self.layer0(x))
         x = self.pool(x)
         x = F.leaky_relu(self.layer1(x))
+        # x = self.layer1(x)
+
+        return x
+
+    def decode(self, x):
         x = self.reverse_pool(x)
         x = self.layer2(x)
+        return x
+
+    def forward(self, x):
+        x = self.encode(x)
+        x = self.decode(x)
         return x
 
     def coarsen(self, graph):
@@ -138,6 +158,7 @@ def train(data, net):
 
     criterion = nn.MSELoss()
     optimizer = optim.Adam(net.parameters(), lr=1e-4)
+    # optimizer = optim.SGD(net.parameters(), lr=1e-1)
     for epoch in range(5000):
         total_loss = 0
         for x in data:
@@ -154,15 +175,14 @@ def train(data, net):
 
     print('Finished Training')
 
+if __name__ == "__main__":
+    num_vertices = 5
+    edge_list = [(0,1), (1,2), (2,0), (0,3), (1,4)]
 
-num_vertices = 5
-edge_list = [(0,1), (1,2), (2,0), (0,3), (1,4)]
+    net = GCN(Graph(num_vertices,edge_list))
 
-net = GCN(Graph(num_vertices,edge_list))
+    data = [torch.rand(num_vertices, dtype=torch.float) for i in range(1)]
 
-data = [torch.rand(num_vertices, dtype=torch.float) for i in range(10)]
-
-print(list(net.parameters())[0])
-train(data,net)
-print(list(net.parameters())[0])
-embed()
+    print(list(net.parameters())[0])
+    train(data,net)
+    print(list(net.parameters())[0])
